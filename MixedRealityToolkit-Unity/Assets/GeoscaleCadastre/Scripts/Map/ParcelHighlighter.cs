@@ -72,24 +72,48 @@ namespace GeoscaleCadastre.Map
         /// <param name="parcel">Parcelle à surligner</param>
         public void HighlightParcel(ParcelModel parcel)
         {
-            if (parcel == null || parcel.Geometry == null || parcel.Geometry.Length < 3)
+            Debug.Log("=== [ParcelHighlighter] DÉBUT SURLIGNAGE PARCELLE ===");
+
+            if (parcel == null)
             {
-                Debug.LogWarning("[ParcelHighlighter] Parcelle invalide ou sans géométrie");
+                Debug.LogError("[ParcelHighlighter] ERREUR: Parcelle est NULL");
                 return;
             }
 
+            if (parcel.Geometry == null)
+            {
+                Debug.LogError("[ParcelHighlighter] ERREUR: Parcelle.Geometry est NULL");
+                return;
+            }
+
+            if (parcel.Geometry.Length < 3)
+            {
+                Debug.LogError(string.Format("[ParcelHighlighter] ERREUR: Géométrie invalide - seulement {0} points (minimum 3)", parcel.Geometry.Length));
+                return;
+            }
+
+            Debug.Log(string.Format("[ParcelHighlighter] Parcelle valide: {0}", parcel.GetFormattedId()));
+            Debug.Log(string.Format("[ParcelHighlighter] Géométrie: {0} points", parcel.Geometry.Length));
+            Debug.Log(string.Format("[ParcelHighlighter] Premier point: {0}", parcel.Geometry[0]));
+            Debug.Log(string.Format("[ParcelHighlighter] Centroid: {0}", parcel.Centroid));
+
             // Nettoyer le surlignage précédent
+            Debug.Log("[ParcelHighlighter] Nettoyage du surlignage précédent...");
             ClearHighlight();
 
             _currentParcel = parcel;
 
             // Créer le mesh de remplissage
+            Debug.Log("[ParcelHighlighter] Création du mesh de remplissage...");
             CreateFillMesh(parcel);
+            Debug.Log(string.Format("[ParcelHighlighter] Mesh de remplissage créé: {0}", _currentFillObject != null ? "OK" : "ÉCHEC"));
 
             // Créer le contour
+            Debug.Log("[ParcelHighlighter] Création du contour...");
             CreateOutline(parcel);
+            Debug.Log(string.Format("[ParcelHighlighter] Contour créé: {0}", _currentOutlineObject != null ? "OK" : "ÉCHEC"));
 
-            Debug.Log(string.Format("[ParcelHighlighter] Parcelle surlignée: {0}", parcel.GetFormattedId()));
+            Debug.Log("=== [ParcelHighlighter] FIN SURLIGNAGE PARCELLE ===");
         }
 
         /// <summary>
@@ -129,31 +153,44 @@ namespace GeoscaleCadastre.Map
 
         private void CreateFillMesh(ParcelModel parcel)
         {
+            Debug.Log("[ParcelHighlighter.CreateFillMesh] Création du GameObject...");
             _currentFillObject = new GameObject("ParcelFill");
             _currentFillObject.transform.SetParent(_highlightParent);
+            Debug.Log(string.Format("[ParcelHighlighter.CreateFillMesh] GameObject créé, parent: {0}", _highlightParent != null ? _highlightParent.name : "NULL"));
 
             var meshFilter = _currentFillObject.AddComponent<MeshFilter>();
             var meshRenderer = _currentFillObject.AddComponent<MeshRenderer>();
+            Debug.Log("[ParcelHighlighter.CreateFillMesh] MeshFilter et MeshRenderer ajoutés");
 
             // Créer le mesh à partir de la géométrie
+            Debug.Log("[ParcelHighlighter.CreateFillMesh] Appel de CreatePolygonMesh...");
             var mesh = CreatePolygonMesh(parcel.Geometry);
+            Debug.Log(string.Format("[ParcelHighlighter.CreateFillMesh] Mesh créé - Vertices: {0}, Triangles: {1}",
+                mesh.vertexCount, mesh.triangles.Length / 3));
             meshFilter.mesh = mesh;
 
             // Appliquer le matériau
             var mat = new Material(_fillMaterial);
             mat.color = _fillColor;
             meshRenderer.material = mat;
+            Debug.Log(string.Format("[ParcelHighlighter.CreateFillMesh] Matériau appliqué - Couleur: {0}, Shader: {1}",
+                _fillColor, mat.shader.name));
 
             // Positionner au-dessus de la carte
             _currentFillObject.transform.localPosition = new Vector3(0, _highlightHeight, 0);
+            Debug.Log(string.Format("[ParcelHighlighter.CreateFillMesh] Position locale: {0}", _currentFillObject.transform.localPosition));
+            Debug.Log(string.Format("[ParcelHighlighter.CreateFillMesh] Position mondiale: {0}", _currentFillObject.transform.position));
+            Debug.Log(string.Format("[ParcelHighlighter.CreateFillMesh] Active: {0}", _currentFillObject.activeSelf));
         }
 
         private void CreateOutline(ParcelModel parcel)
         {
+            Debug.Log("[ParcelHighlighter.CreateOutline] Création du GameObject...");
             _currentOutlineObject = new GameObject("ParcelOutline");
             _currentOutlineObject.transform.SetParent(_highlightParent);
 
             var lineRenderer = _currentOutlineObject.AddComponent<LineRenderer>();
+            Debug.Log("[ParcelHighlighter.CreateOutline] LineRenderer ajouté");
 
             // Configurer le LineRenderer
             lineRenderer.material = _outlineMaterial;
@@ -163,14 +200,25 @@ namespace GeoscaleCadastre.Map
             lineRenderer.endWidth = _outlineWidth;
             lineRenderer.useWorldSpace = false;
             lineRenderer.loop = true;
+            Debug.Log(string.Format("[ParcelHighlighter.CreateOutline] LineRenderer configuré - Couleur: {0}, Width: {1}",
+                _outlineColor, _outlineWidth));
 
             // Définir les points du contour
             var points = ConvertToWorldPositions(parcel.Geometry);
             lineRenderer.positionCount = points.Length;
             lineRenderer.SetPositions(points);
+            Debug.Log(string.Format("[ParcelHighlighter.CreateOutline] Points du contour: {0}", points.Length));
+            if (points.Length > 0)
+            {
+                Debug.Log(string.Format("[ParcelHighlighter.CreateOutline] Premier point: {0}, Dernier point: {1}",
+                    points[0], points[points.Length - 1]));
+            }
 
             // Positionner au-dessus de la carte
             _currentOutlineObject.transform.localPosition = new Vector3(0, _highlightHeight + 0.001f, 0);
+            Debug.Log(string.Format("[ParcelHighlighter.CreateOutline] Position locale: {0}", _currentOutlineObject.transform.localPosition));
+            Debug.Log(string.Format("[ParcelHighlighter.CreateOutline] Position mondiale: {0}", _currentOutlineObject.transform.position));
+            Debug.Log(string.Format("[ParcelHighlighter.CreateOutline] Active: {0}", _currentOutlineObject.activeSelf));
         }
 
         private Mesh CreatePolygonMesh(Vector2[] geometry)
@@ -231,9 +279,19 @@ namespace GeoscaleCadastre.Map
                 float x = offsetLng * 75000f * 0.00001f; // Mise à l'échelle pour Unity
                 float z = offsetLat * 111000f * 0.00001f;
 
-                return new Vector3(x, 0, z);
+                Vector3 result = new Vector3(x, 0, z);
+
+                // Log seulement pour le premier point pour éviter trop de logs
+                if (gpsCoord == _currentParcel.Geometry[0])
+                {
+                    Debug.Log(string.Format("[ParcelHighlighter.ConvertGpsToLocal] GPS: {0} -> Local: {1} (offset lng={2:F6}, lat={3:F6})",
+                        gpsCoord, result, offsetLng, offsetLat));
+                }
+
+                return result;
             }
 
+            Debug.LogWarning("[ParcelHighlighter.ConvertGpsToLocal] _currentParcel est NULL - conversion par défaut");
             return new Vector3(gpsCoord.x, 0, gpsCoord.y);
         }
 

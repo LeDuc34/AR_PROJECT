@@ -49,6 +49,17 @@ namespace GeoscaleCadastre.Parcel
         /// <summary>Indique si une sélection est en cours</summary>
         public bool IsSelecting { get { return _isSelecting; } }
 
+        private void Start()
+        {
+            // === DEBUG: Vérification des références au démarrage ===
+            Debug.Log("=== [ParcelSelectionHandler] DEBUG START ===");
+            Debug.Log(string.Format("[ParcelSelectionHandler] _mapManager: {0}", _mapManager != null ? "OK" : "NULL"));
+            Debug.Log(string.Format("[ParcelSelectionHandler] _parcelService: {0}", _parcelService != null ? "OK" : "NULL"));
+            Debug.Log(string.Format("[ParcelSelectionHandler] _highlighter: {0}", _highlighter != null ? "OK" : "NULL"));
+            Debug.Log(string.Format("[ParcelSelectionHandler] _mapCollider: {0}", _mapCollider != null ? "OK" : "NULL"));
+            Debug.Log("=== [ParcelSelectionHandler] DEBUG END ===");
+        }
+
         private void OnEnable()
         {
             // S'abonner aux événements du service parcelle
@@ -56,6 +67,11 @@ namespace GeoscaleCadastre.Parcel
             {
                 _parcelService.OnParcelLoaded += HandleParcelLoaded;
                 _parcelService.OnError += HandleParcelError;
+                Debug.Log("[ParcelSelectionHandler] Abonné aux événements ParcelService");
+            }
+            else
+            {
+                Debug.LogWarning("[ParcelSelectionHandler] OnEnable: _parcelService est NULL");
             }
         }
 
@@ -75,22 +91,33 @@ namespace GeoscaleCadastre.Parcel
         /// <param name="worldPosition">Position dans le monde Unity</param>
         public void SelectParcelAtWorldPosition(Vector3 worldPosition)
         {
+            Debug.Log("=== [ParcelSelectionHandler] DÉBUT SelectParcelAtWorldPosition ===");
+            Debug.Log(string.Format("[ParcelSelectionHandler] >>> SelectParcelAtWorldPosition - worldPosition: {0}", worldPosition));
+
             if (_isSelecting)
             {
-                Debug.LogWarning("[ParcelSelectionHandler] Sélection déjà en cours");
+                Debug.LogWarning("[ParcelSelectionHandler] Sélection déjà en cours, ignorée");
                 return;
             }
 
             // Convertir la position monde en coordonnées GPS
             double lat, lng;
+            Debug.Log("[ParcelSelectionHandler] Tentative de conversion World -> GPS...");
+            Debug.Log(string.Format("[ParcelSelectionHandler] _mapManager: {0}", _mapManager != null ? "OK" : "NULL"));
+
             if (TryConvertWorldToGps(worldPosition, out lat, out lng))
             {
+                Debug.Log(string.Format("[ParcelSelectionHandler] ✓ Conversion RÉUSSIE: ({0:F6}, {1:F6})", lat, lng));
+                Debug.Log("[ParcelSelectionHandler] Appel de SelectParcelAtCoordinates...");
                 SelectParcelAtCoordinates(lat, lng);
             }
             else
             {
-                Debug.LogWarning("[ParcelSelectionHandler] Impossible de convertir les coordonnées");
+                Debug.LogError("[ParcelSelectionHandler] ✗ ÉCHEC de conversion World -> GPS");
+                Debug.LogError("[ParcelSelectionHandler] La sélection de parcelle est IMPOSSIBLE sans coordonnées GPS valides");
             }
+
+            Debug.Log("=== [ParcelSelectionHandler] FIN SelectParcelAtWorldPosition ===");
         }
 
         /// <summary>
@@ -100,16 +127,24 @@ namespace GeoscaleCadastre.Parcel
         /// <param name="longitude">Longitude</param>
         public void SelectParcelAtCoordinates(double latitude, double longitude)
         {
+            Debug.Log("=== [ParcelSelectionHandler.SelectParcelAtCoordinates] DÉBUT ===");
+            Debug.Log(string.Format("[ParcelSelectionHandler.SelectParcelAtCoordinates] Coordonnées GPS: ({0:F6}, {1:F6})", latitude, longitude));
+
             if (_parcelService == null)
             {
-                Debug.LogError("[ParcelSelectionHandler] ParcelDataService non assigné");
+                Debug.LogError("[ParcelSelectionHandler.SelectParcelAtCoordinates] ERREUR: ParcelDataService non assigné!");
                 return;
             }
 
+            Debug.Log("[ParcelSelectionHandler.SelectParcelAtCoordinates] ParcelDataService OK");
+
             _isSelecting = true;
-            Debug.Log(string.Format("[ParcelSelectionHandler] Sélection parcelle à ({0}, {1})", latitude, longitude));
+            Debug.Log(string.Format("[ParcelSelectionHandler.SelectParcelAtCoordinates] État _isSelecting = true"));
+            Debug.Log(string.Format("[ParcelSelectionHandler.SelectParcelAtCoordinates] Appel de _parcelService.FetchParcelAtCoordinates({0:F6}, {1:F6})...", latitude, longitude));
 
             _parcelService.FetchParcelAtCoordinates(latitude, longitude);
+
+            Debug.Log("=== [ParcelSelectionHandler.SelectParcelAtCoordinates] FIN ===");
         }
 
         /// <summary>
@@ -149,23 +184,43 @@ namespace GeoscaleCadastre.Parcel
             _isSelecting = false;
             _selectedParcel = parcel;
 
+            Debug.Log("=== [ParcelSelectionHandler] PARCELLE CHARGÉE - DÉBUT TRAITEMENT ===");
+            Debug.Log(string.Format("[ParcelSelectionHandler] Parcelle sélectionnée: {0}", parcel));
+            Debug.Log(string.Format("[ParcelSelectionHandler] Géométrie: {0} points", parcel.Geometry != null ? parcel.Geometry.Length : 0));
+            Debug.Log(string.Format("[ParcelSelectionHandler] Centroid: {0}", parcel.Centroid));
+            Debug.Log(string.Format("[ParcelSelectionHandler] Surface: {0} m²", parcel.Surface));
+
             // Surligner la parcelle
             if (_highlighter != null)
             {
+                Debug.Log("[ParcelSelectionHandler] Appel de _highlighter.HighlightParcel()...");
                 _highlighter.HighlightParcel(parcel);
+                Debug.Log("[ParcelSelectionHandler] _highlighter.HighlightParcel() terminé");
+            }
+            else
+            {
+                Debug.LogError("[ParcelSelectionHandler] _highlighter est NULL - IMPOSSIBLE DE COLORIER LA PARCELLE !");
             }
 
             // Centrer la carte sur la parcelle (pattern Geoscale)
             if (_mapManager != null)
             {
+                Debug.Log("[ParcelSelectionHandler] Centrage de la carte sur la parcelle...");
                 _mapManager.CenterOnParcel(parcel, 0.8f);
+            }
+            else
+            {
+                Debug.LogWarning("[ParcelSelectionHandler] _mapManager est NULL - pas de centrage");
             }
 
             // Notifier les listeners
             if (OnParcelSelected != null)
+            {
+                Debug.Log(string.Format("[ParcelSelectionHandler] Notification de {0} listeners...", OnParcelSelected.GetInvocationList().Length));
                 OnParcelSelected(parcel);
+            }
 
-            Debug.Log(string.Format("[ParcelSelectionHandler] Parcelle sélectionnée: {0}", parcel));
+            Debug.Log("=== [ParcelSelectionHandler] PARCELLE CHARGÉE - FIN TRAITEMENT ===");
         }
 
         private void HandleParcelError(string error)
@@ -176,35 +231,29 @@ namespace GeoscaleCadastre.Parcel
 
         /// <summary>
         /// Convertit une position monde Unity en coordonnées GPS
-        /// Note: Cette conversion dépend de la configuration Mapbox
+        /// Délègue à MapManager qui utilise la méthode WorldToGeoPosition du SDK Mapbox
         /// </summary>
         private bool TryConvertWorldToGps(Vector3 worldPos, out double latitude, out double longitude)
         {
+            Debug.Log("[ParcelSelectionHandler.TryConvertWorldToGps] >>> Entrée dans la méthode");
+            Debug.Log(string.Format("[ParcelSelectionHandler.TryConvertWorldToGps] worldPos: {0}", worldPos));
+
             latitude = 0;
             longitude = 0;
 
-            // Si nous avons un MapManager, utiliser sa position actuelle comme référence
-            if (_mapManager != null)
+            if (_mapManager == null)
             {
-                // Conversion basique: position relative au centre de la carte
-                // À ajuster selon l'échelle réelle de la carte Mapbox
-
-                // Facteurs de conversion approximatifs (à calibrer)
-                // Dépend de l'échelle de la carte dans Unity
-                const float metersPerUnit = 1f; // À ajuster
-                const float latDegreesPerMeter = 1f / 111000f;
-                const float lngDegreesPerMeter = 1f / 75000f; // À ~46° latitude
-
-                // Position relative au centre de la carte
-                Vector3 relativePos = worldPos - transform.position;
-
-                latitude = _mapManager.CurrentLatitude + (relativePos.z * metersPerUnit * latDegreesPerMeter);
-                longitude = _mapManager.CurrentLongitude + (relativePos.x * metersPerUnit * lngDegreesPerMeter);
-
-                return true;
+                Debug.LogError("[ParcelSelectionHandler.TryConvertWorldToGps] ERREUR: MapManager non assigné!");
+                return false;
             }
 
-            return false;
+            Debug.Log("[ParcelSelectionHandler.TryConvertWorldToGps] MapManager OK, appel de TryWorldToGeoPosition...");
+            bool result = _mapManager.TryWorldToGeoPosition(worldPos, out latitude, out longitude);
+
+            Debug.Log(string.Format("[ParcelSelectionHandler.TryConvertWorldToGps] Résultat: {0}, lat: {1:F6}, lng: {2:F6}",
+                result, latitude, longitude));
+
+            return result;
         }
 
         #region MRTK Integration
@@ -214,6 +263,7 @@ namespace GeoscaleCadastre.Parcel
         /// </summary>
         public void OnMRTKPointerClicked(Vector3 hitPoint)
         {
+            Debug.Log(string.Format("[ParcelSelectionHandler] >>> OnMRTKPointerClicked - hitPoint: {0}", hitPoint));
             SelectParcelAtWorldPosition(hitPoint);
         }
 

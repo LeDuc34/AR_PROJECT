@@ -14,7 +14,7 @@ namespace GeoscaleCadastre.Map
         [Header("Configuration")]
         [SerializeField]
         [Tooltip("Référence au composant AbstractMap de Mapbox")]
-        private Component _mapboxMap; // AbstractMap - utiliser Component pour éviter la dépendance directe
+        private MonoBehaviour _mapboxMap; // AbstractMap - utiliser MonoBehaviour pour permettre l'assignation dans l'Inspector
 
         [SerializeField]
         [Tooltip("Latitude par défaut (Paris)")]
@@ -60,6 +60,12 @@ namespace GeoscaleCadastre.Map
 
         private void Start()
         {
+            // === DEBUG: Vérification des références au démarrage ===
+            Debug.Log("=== [MapManager] DEBUG START ===");
+            Debug.Log(string.Format("[MapManager] _mapboxMap: {0}", _mapboxMap != null ? _mapboxMap.GetType().Name : "NULL"));
+            Debug.Log(string.Format("[MapManager] Default position: ({0}, {1}) zoom {2}", _defaultLatitude, _defaultLongitude, _defaultZoom));
+            Debug.Log("=== [MapManager] DEBUG END ===");
+
             Initialize();
         }
 
@@ -164,14 +170,21 @@ namespace GeoscaleCadastre.Map
         /// </summary>
         public void SetPosition(double latitude, double longitude, float zoom)
         {
+            Debug.Log(string.Format("[MapManager] >>> SetPosition - lat: {0:F6}, lng: {1:F6}, zoom: {2:F1}",
+                latitude, longitude, zoom));
+
             _currentLatitude = latitude;
             _currentLongitude = longitude;
             _currentZoom = zoom;
 
+            Debug.Log("[MapManager] Appel UpdateMapboxPosition...");
             UpdateMapboxPosition();
 
             if (OnMapMoved != null)
+            {
+                Debug.Log("[MapManager] Déclenchement événement OnMapMoved");
                 OnMapMoved(latitude, longitude, zoom);
+            }
         }
 
         /// <summary>
@@ -277,11 +290,16 @@ namespace GeoscaleCadastre.Map
         private void UpdateMapboxPosition()
         {
             // Mise à jour de la position Mapbox via reflection
-            if (_mapboxMap == null) return;
+            if (_mapboxMap == null)
+            {
+                Debug.LogWarning("[MapManager] UpdateMapboxPosition: _mapboxMap est NULL, impossible de mettre à jour");
+                return;
+            }
 
             try
             {
                 var mapType = _mapboxMap.GetType();
+                Debug.Log(string.Format("[MapManager] UpdateMapboxPosition - MapType: {0}", mapType.Name));
 
                 // Option 1: Chercher la méthode UpdateMap(Vector2d, float)
                 var updateMethod = mapType.GetMethod("UpdateMap");
@@ -291,9 +309,20 @@ namespace GeoscaleCadastre.Map
                     if (vector2dType != null)
                     {
                         var center = Activator.CreateInstance(vector2dType, _currentLatitude, _currentLongitude);
+                        Debug.Log(string.Format("[MapManager] Appel UpdateMap via reflection - center: ({0}, {1}), zoom: {2}",
+                            _currentLatitude, _currentLongitude, _currentZoom));
                         updateMethod.Invoke(_mapboxMap, new object[] { center, _currentZoom });
+                        Debug.Log("[MapManager] UpdateMap appelé avec succès");
                         return;
                     }
+                    else
+                    {
+                        Debug.LogWarning("[MapManager] Type Vector2d non trouvé");
+                    }
+                }
+                else
+                {
+                    Debug.Log("[MapManager] Méthode UpdateMap non trouvée, tentative via propriétés");
                 }
 
                 // Option 2: Modifier les propriétés directement
@@ -307,18 +336,154 @@ namespace GeoscaleCadastre.Map
                     {
                         var center = Activator.CreateInstance(vector2dType, _currentLatitude, _currentLongitude);
                         centerProp.SetValue(_mapboxMap, center);
+                        Debug.Log("[MapManager] CenterLatitudeLongitude défini via propriété");
                     }
+                }
+                else
+                {
+                    Debug.LogWarning("[MapManager] Propriété CenterLatitudeLongitude non trouvée");
                 }
 
                 if (zoomProp != null)
                 {
                     zoomProp.SetValue(_mapboxMap, _currentZoom);
+                    Debug.Log("[MapManager] Zoom défini via propriété");
+                }
+                else
+                {
+                    Debug.LogWarning("[MapManager] Propriété Zoom non trouvée");
                 }
             }
             catch (Exception e)
             {
                 Debug.LogWarning(string.Format("[MapManager] Erreur mise à jour Mapbox: {0}", e.Message));
             }
+        }
+
+        /// <summary>
+        /// Convertit une position monde Unity en coordonnées GPS via Mapbox SDK
+        /// Utilise AbstractMap.WorldToGeoPosition pour une conversion précise
+        /// </summary>
+        /// <param name="worldPos">Position dans le monde Unity</param>
+        /// <param name="latitude">Latitude résultante</param>
+        /// <param name="longitude">Longitude résultante</param>
+        /// <returns>True si la conversion a réussi</returns>
+        public bool TryWorldToGeoPosition(Vector3 worldPos, out double latitude, out double longitude)
+        {
+            Debug.Log(string.Format("[MapManager.TryWorldToGeoPosition] >>> Appel avec worldPos: {0}", worldPos));
+
+            latitude = 0;
+            longitude = 0;
+
+            if (_mapboxMap == null)
+            {
+                Debug.LogError("[MapManager.TryWorldToGeoPosition] ERREUR: AbstractMap non assigné, conversion IMPOSSIBLE");
+                return false;
+            }
+
+            Debug.Log("[MapManager.TryWorldToGeoPosition] AbstractMap OK, tentative de conversion...");
+
+            try
+            {
+                var mapType = _mapboxMap.GetType();
+
+                // Chercher la méthode WorldToGeoPosition(Vector3)
+                var worldToGeoMethod = mapType.GetMethod("WorldToGeoPosition", new Type[] { typeof(Vector3) });
+
+                if (worldToGeoMethod != null)
+                {
+                    // Appeler WorldToGeoPosition et récupérer le Vector2d résultant
+                    var result = worldToGeoMethod.Invoke(_mapboxMap, new object[] { worldPos });
+
+                    if (result != null)
+                    {
+                        // Extraire x (latitude) et y (longitude) du Vector2d
+                        var resultType = result.GetType();
+                        var xField = resultType.GetField("x");
+                        var yField = resultType.GetField("y");
+
+                        if (xField != null && yField != null)
+                        {
+                            latitude = (double)xField.GetValue(result);
+                            longitude = (double)yField.GetValue(result);
+
+                            Debug.Log(string.Format("[MapManager] Conversion Mapbox: world({0}) -> GPS({1:F6}, {2:F6})",
+                                worldPos, latitude, longitude));
+
+                            return true;
+                        }
+                    }
+                }
+
+                Debug.LogWarning("[MapManager] Méthode WorldToGeoPosition non trouvée");
+            }
+            catch (Exception e)
+            {
+                Debug.LogError(string.Format("[MapManager] Erreur conversion WorldToGeo: {0}", e.Message));
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Convertit des coordonnées GPS en position monde Unity via Mapbox SDK
+        /// Utilise AbstractMap.GeoToWorldPosition pour une conversion précise
+        /// </summary>
+        /// <param name="latitude">Latitude</param>
+        /// <param name="longitude">Longitude</param>
+        /// <param name="worldPos">Position Unity résultante</param>
+        /// <returns>True si la conversion a réussi</returns>
+        public bool TryGeoToWorldPosition(double latitude, double longitude, out Vector3 worldPos)
+        {
+            worldPos = Vector3.zero;
+
+            if (_mapboxMap == null)
+            {
+                Debug.LogWarning("[MapManager] AbstractMap non assigné, conversion impossible");
+                return false;
+            }
+
+            try
+            {
+                var mapType = _mapboxMap.GetType();
+                var vector2dType = Type.GetType("Mapbox.Utils.Vector2d, Mapbox.Unity");
+
+                if (vector2dType == null)
+                {
+                    Debug.LogWarning("[MapManager] Type Vector2d non trouvé");
+                    return false;
+                }
+
+                // Créer le Vector2d avec lat/lng
+                var latLng = Activator.CreateInstance(vector2dType, latitude, longitude);
+
+                // Chercher la méthode GeoToWorldPosition(Vector2d, bool)
+                var geoToWorldMethod = mapType.GetMethod("GeoToWorldPosition",
+                    new Type[] { vector2dType, typeof(bool) });
+
+                if (geoToWorldMethod != null)
+                {
+                    var result = geoToWorldMethod.Invoke(_mapboxMap, new object[] { latLng, false });
+
+                    if (result is Vector3)
+                    {
+                        worldPos = (Vector3)result;
+
+                        Debug.Log(string.Format("[MapManager] Conversion Mapbox: GPS({0:F6}, {1:F6}) -> world({2})",
+                            latitude, longitude, worldPos));
+
+                        return true;
+                    }
+                }
+
+                Debug.LogWarning("[MapManager] Méthode GeoToWorldPosition non trouvée");
+            }
+            catch (Exception e)
+            {
+                Debug.LogError(string.Format("[MapManager] Erreur conversion GeoToWorld: {0}", e.Message));
+            }
+
+            return false;
         }
     }
 }
