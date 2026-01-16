@@ -17,9 +17,13 @@ EditorBuildSettings:
       type: 2}
     com.unity.xr.arcore.PlayerSettings: {fileID: 11400000, guid: e62a87a58e0855440bf3675f4e3eac18,
       type: 2}
+    com.unity.xr.arfoundation.simulation_settings: {fileID: 11400000, guid: 96957f999b21f724382c881fedb6780a,
+      type: 2}
     com.unity.xr.arkit.PlayerSettings: {fileID: 11400000, guid: d96734d10d0040248bbb79519bb034b7,
       type: 2}
-    com.unity.xr.management.loader_settings: {fileID: 11400000, guid: c56bfdcf5c850a246a31dfc330710d10,
+    com.unity.xr.management.loader_settings: {fileID: 11400000, guid: 181605d000e91284ea90da658199466b,
       type: 2}
     com.unity.xr.openxr.settings4: {fileID: 11400000, guid: 253ed06b0d48f2e4793c1afb7ae72f5f,
+      type: 2}
+    xr.sdk.mock-hmd.settings: {fileID: 11400000, guid: a2fa37e70953e984381bc964c7403268,
       type: 2}
