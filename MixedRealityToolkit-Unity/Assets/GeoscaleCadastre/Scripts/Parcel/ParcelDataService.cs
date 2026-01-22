@@ -91,9 +91,17 @@ namespace GeoscaleCadastre.Parcel
                 (e) => { communeError = e; communeDone = true; }
             ));
 
-            // Attendre que les deux requêtes soient terminées
+            // Attendre que les deux requêtes soient terminées (avec timeout de sécurité)
+            float timeout = 30f; // 30 secondes max
+            float elapsed = 0f;
             while (!parcelDone || !communeDone)
             {
+                elapsed += Time.deltaTime;
+                if (elapsed > timeout)
+                {
+                    Debug.LogWarning("[ParcelDataService.FetchParcelCoroutine] Timeout atteint, abandon des requêtes en cours");
+                    break;
+                }
                 yield return null;
             }
 
@@ -158,25 +166,29 @@ namespace GeoscaleCadastre.Parcel
                 Debug.Log(string.Format("[ParcelDataService.FetchParcelDataCoroutine] JSON brut (200 premiers caractères): {0}",
                     request.downloadHandler.text.Substring(0, Mathf.Min(200, request.downloadHandler.text.Length))));
 
+                ParcelModel parcel = null;
                 try
                 {
-                    var parcel = ParseParcelResponse(request.downloadHandler.text);
-                    if (parcel != null)
-                    {
-                        Debug.Log("[ParcelDataService.FetchParcelDataCoroutine] Parcelle parsée avec succès!");
-                        onSuccess(parcel);
-                    }
-                    else
-                    {
-                        Debug.LogWarning("[ParcelDataService.FetchParcelDataCoroutine] ParseParcelResponse a retourné NULL");
-                        onError("Aucune parcelle trouvée à ces coordonnées");
-                    }
+                    parcel = ParseParcelResponse(request.downloadHandler.text);
                 }
                 catch (Exception e)
                 {
                     Debug.LogError(string.Format("[ParcelDataService.FetchParcelDataCoroutine] Exception lors du parsing: {0}\nStackTrace: {1}",
                         e.Message, e.StackTrace));
                     onError(string.Format("Parsing error: {0}", e.Message));
+                    yield break;
+                }
+
+                if (parcel != null)
+                {
+                    Debug.Log("[ParcelDataService.FetchParcelDataCoroutine] Parcelle parsée avec succès!");
+                    onSuccess(parcel);
+                }
+                else
+                {
+                    // Pas d'erreur technique, simplement pas de parcelle à cet endroit
+                    Debug.Log("[ParcelDataService.FetchParcelDataCoroutine] Aucune parcelle à ces coordonnées");
+                    onError("Aucune parcelle trouvée à ces coordonnées");
                 }
             }
         }
@@ -221,12 +233,22 @@ namespace GeoscaleCadastre.Parcel
             // Note: On ne peut pas utiliser JsonUtility pour parser la géométrie directement
             // car Polygon et MultiPolygon ont des structures différentes (3D vs 4D)
 
-            // Parser le JSON de base sans la géométrie
-            var response = JsonUtility.FromJson<GeoJsonFeatureCollectionWrapper>(json);
+            GeoJsonFeatureCollectionWrapper response = null;
+
+            // Parser le JSON de base sans la géométrie - avec protection contre les exceptions
+            try
+            {
+                response = JsonUtility.FromJson<GeoJsonFeatureCollectionWrapper>(json);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning(string.Format("[ParcelDataService.ParseParcelResponse] Erreur parsing JSON: {0}", e.Message));
+                return null;
+            }
 
             if (response == null || response.features == null || response.features.Length == 0)
             {
-                Debug.LogError("[ParcelDataService.ParseParcelResponse] Aucune parcelle trouvée dans la réponse");
+                Debug.Log("[ParcelDataService.ParseParcelResponse] Aucune parcelle trouvée à ces coordonnées (réponse API vide)");
                 return null;
             }
 
