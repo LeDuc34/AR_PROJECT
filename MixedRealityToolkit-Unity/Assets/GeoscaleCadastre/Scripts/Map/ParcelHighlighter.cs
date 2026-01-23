@@ -6,83 +6,124 @@ namespace GeoscaleCadastre.Map
 {
     /// <summary>
     /// Gère le surlignage visuel des parcelles sélectionnées sur la carte
+    /// Utilise un Projector pour "peindre" la couleur sur la carte et les bâtiments
     /// </summary>
     public class ParcelHighlighter : MonoBehaviour
     {
         [Header("Configuration visuelle")]
         [SerializeField]
-        [Tooltip("Matériau pour le remplissage de la parcelle")]
-        private Material _fillMaterial;
+        [Tooltip("Couleur de projection")]
+        private Color _highlightColor = new Color(0, 0.9f, 0.75f, 0.5f); // #00E5BE avec transparence
 
         [SerializeField]
-        [Tooltip("Matériau pour le contour de la parcelle")]
-        private Material _outlineMaterial;
+        [Tooltip("Résolution de la texture de projection (plus élevé = plus précis)")]
+        private int _textureResolution = 512;
 
         [SerializeField]
-        [Tooltip("Couleur de remplissage")]
-        private Color _fillColor = new Color(0, 0.9f, 0.75f, 0.3f); // #00E5BE avec transparence
+        [Tooltip("Hauteur du Projector au-dessus de la carte")]
+        private float _projectorHeight = 10f;
 
         [SerializeField]
-        [Tooltip("Couleur du contour")]
-        private Color _outlineColor = new Color(0, 0.9f, 0.75f, 1f); // #00E5BE
+        [Tooltip("Profondeur de projection (doit couvrir les bâtiments)")]
+        private float _projectorDepth = 20f;
 
         [SerializeField]
-        [Tooltip("Épaisseur du contour")]
-        private float _outlineWidth = 0.002f;
+        [Tooltip("Marge autour de la parcelle (en pourcentage)")]
+        [Range(0.05f, 0.5f)]
+        private float _boundsPadding = 0.1f;
+
+        [Header("Simplification de géométrie")]
+        [SerializeField]
+        [Tooltip("Activer la simplification Douglas-Peucker")]
+        private bool _simplifyGeometry = true;
 
         [SerializeField]
-        [Tooltip("Hauteur du surlignage au-dessus de la carte")]
-        private float _highlightHeight = 0.01f;
+        [Tooltip("Tolérance de simplification (plus élevé = moins de points)")]
+        [Range(0.001f, 0.1f)]
+        private float _simplificationTolerance = 0.01f;
 
         [Header("Références")]
-        [SerializeField]
-        [Tooltip("Parent des objets de surlignage")]
-        private Transform _highlightParent;
-
         [SerializeField]
         [Tooltip("Référence au MapManager pour la conversion de coordonnées")]
         private MapManager _mapManager;
 
-        // Objets créés pour le surlignage
-        private GameObject _currentFillObject;
-        private GameObject _currentOutlineObject;
+        [SerializeField]
+        [Tooltip("Layers à ignorer par le Projector")]
+        private LayerMask _ignoreLayers;
+
+        // Composants du Projector
+        private GameObject _projectorObject;
+        private Projector _projector;
+        private Material _projectorMaterial;
+        private Texture2D _parcelTexture;
         private ParcelModel _currentParcel;
+        private bool _isXYPlane; // True si la carte est dans le plan XY, false si XZ
 
         private void Awake()
         {
-            // Créer le parent si nécessaire
-            if (_highlightParent == null)
-            {
-                var parentObj = new GameObject("ParcelHighlights");
-                parentObj.transform.SetParent(transform);
-                _highlightParent = parentObj.transform;
-            }
-
-            // Créer les matériaux par défaut si non assignés
-            if (_fillMaterial == null)
-            {
-                _fillMaterial = CreateDefaultFillMaterial();
-            }
-
-            if (_outlineMaterial == null)
-            {
-                _outlineMaterial = CreateDefaultOutlineMaterial();
-            }
-
             // Vérifier que MapManager est assigné
             if (_mapManager == null)
             {
-                Debug.LogWarning("[ParcelHighlighter] MapManager non assigné! Le surlignage ne fonctionnera pas correctement. Assignez-le dans l'Inspector.");
+                Debug.LogWarning("[ParcelHighlighter] MapManager non assigné! Le surlignage ne fonctionnera pas correctement.");
             }
+
+            // Créer le Projector
+            CreateProjector();
+        }
+
+        private void CreateProjector()
+        {
+            _projectorObject = new GameObject("ParcelProjector");
+            _projectorObject.transform.SetParent(transform);
+
+            _projector = _projectorObject.AddComponent<Projector>();
+
+            // Créer le material pour le Projector
+            _projectorMaterial = CreateProjectorMaterial();
+            _projector.material = _projectorMaterial;
+
+            // Configuration du Projector
+            _projector.orthographic = true;
+            _projector.orthographicSize = 1f; // Sera ajusté dynamiquement
+            _projector.nearClipPlane = 0.1f;
+            _projector.farClipPlane = _projectorDepth;
+            _projector.ignoreLayers = _ignoreLayers;
+
+            // Orienter vers le bas
+            _projectorObject.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
+
+            // Désactiver par défaut
+            _projector.enabled = false;
+
+            Debug.Log("[ParcelHighlighter] Projector créé et configuré");
+        }
+
+        private Material CreateProjectorMaterial()
+        {
+            // Utiliser notre shader custom
+            var shader = Shader.Find("GeoscaleCadastre/ProjectorHighlight");
+            if (shader == null)
+            {
+                Debug.LogError("[ParcelHighlighter] Shader 'GeoscaleCadastre/ProjectorHighlight' non trouvé! Assurez-vous que le fichier ProjectorHighlight.shader est dans le projet.");
+                // Fallback
+                shader = Shader.Find("Projector/Light");
+                if (shader == null) shader = Shader.Find("Unlit/Transparent");
+            }
+
+            var mat = new Material(shader);
+            mat.SetColor("_Color", _highlightColor);
+
+            Debug.Log(string.Format("[ParcelHighlighter] Material créé avec shader: {0}", shader.name));
+
+            return mat;
         }
 
         /// <summary>
-        /// Surligne une parcelle
+        /// Surligne une parcelle en projetant une couleur dessus
         /// </summary>
-        /// <param name="parcel">Parcelle à surligner</param>
         public void HighlightParcel(ParcelModel parcel)
         {
-            Debug.Log("=== [ParcelHighlighter] DÉBUT SURLIGNAGE PARCELLE ===");
+            Debug.Log("=== [ParcelHighlighter] DÉBUT SURLIGNAGE PARCELLE (PROJECTOR) ===");
 
             if (parcel == null)
             {
@@ -90,38 +131,56 @@ namespace GeoscaleCadastre.Map
                 return;
             }
 
-            if (parcel.Geometry == null)
+            if (parcel.Geometry == null || parcel.Geometry.Length < 3)
             {
-                Debug.LogError("[ParcelHighlighter] ERREUR: Parcelle.Geometry est NULL");
+                Debug.LogError("[ParcelHighlighter] ERREUR: Géométrie invalide");
                 return;
             }
 
-            if (parcel.Geometry.Length < 3)
-            {
-                Debug.LogError(string.Format("[ParcelHighlighter] ERREUR: Géométrie invalide - seulement {0} points (minimum 3)", parcel.Geometry.Length));
-                return;
-            }
-
-            Debug.Log(string.Format("[ParcelHighlighter] Parcelle valide: {0}", parcel.GetFormattedId()));
-            Debug.Log(string.Format("[ParcelHighlighter] Géométrie: {0} points", parcel.Geometry.Length));
-            Debug.Log(string.Format("[ParcelHighlighter] Premier point: {0}", parcel.Geometry[0]));
-            Debug.Log(string.Format("[ParcelHighlighter] Centroid: {0}", parcel.Centroid));
+            Debug.Log(string.Format("[ParcelHighlighter] Parcelle: {0}, {1} points",
+                parcel.GetFormattedId(), parcel.Geometry.Length));
 
             // Nettoyer le surlignage précédent
-            Debug.Log("[ParcelHighlighter] Nettoyage du surlignage précédent...");
             ClearHighlight();
 
             _currentParcel = parcel;
 
-            // Créer le mesh de remplissage
-            Debug.Log("[ParcelHighlighter] Création du mesh de remplissage...");
-            CreateFillMesh(parcel);
-            Debug.Log(string.Format("[ParcelHighlighter] Mesh de remplissage créé: {0}", _currentFillObject != null ? "OK" : "ÉCHEC"));
+            // Convertir les coordonnées GPS en positions monde
+            var worldPositions = ConvertToWorldPositions(parcel.Geometry);
+            if (worldPositions.Length == 0 || worldPositions[0] == Vector3.zero)
+            {
+                Debug.LogError("[ParcelHighlighter] Échec de conversion des coordonnées GPS!");
+                return;
+            }
 
-            // Créer le contour
-            Debug.Log("[ParcelHighlighter] Création du contour...");
-            CreateOutline(parcel);
-            Debug.Log(string.Format("[ParcelHighlighter] Contour créé: {0}", _currentOutlineObject != null ? "OK" : "ÉCHEC"));
+            // Calculer la bounding box de la parcelle
+            var bounds = CalculateBounds(worldPositions);
+            Debug.Log(string.Format("[ParcelHighlighter] Bounds: center={0}, size={1}",
+                bounds.center, bounds.size));
+
+            // Détecter l'orientation de la carte (nécessaire pour la simplification)
+            _isXYPlane = bounds.size.z < bounds.size.y;
+
+            // Simplifier la géométrie si activé
+            if (_simplifyGeometry && worldPositions.Length > 4)
+            {
+                int originalCount = worldPositions.Length;
+                worldPositions = SimplifyPolygon(worldPositions, _simplificationTolerance);
+                Debug.Log(string.Format("[ParcelHighlighter] Géométrie simplifiée: {0} → {1} points",
+                    originalCount, worldPositions.Length));
+
+                // Recalculer les bounds après simplification
+                bounds = CalculateBounds(worldPositions);
+            }
+
+            // Générer la texture de la parcelle
+            GenerateParcelTexture(worldPositions, bounds);
+
+            // Positionner et configurer le Projector
+            ConfigureProjector(bounds);
+
+            // Activer le Projector
+            _projector.enabled = true;
 
             Debug.Log("=== [ParcelHighlighter] FIN SURLIGNAGE PARCELLE ===");
         }
@@ -131,16 +190,15 @@ namespace GeoscaleCadastre.Map
         /// </summary>
         public void ClearHighlight()
         {
-            if (_currentFillObject != null)
+            if (_projector != null)
             {
-                Destroy(_currentFillObject);
-                _currentFillObject = null;
+                _projector.enabled = false;
             }
 
-            if (_currentOutlineObject != null)
+            if (_parcelTexture != null)
             {
-                Destroy(_currentOutlineObject);
-                _currentOutlineObject = null;
+                Destroy(_parcelTexture);
+                _parcelTexture = null;
             }
 
             _currentParcel = null;
@@ -149,140 +207,260 @@ namespace GeoscaleCadastre.Map
         /// <summary>
         /// Définit la couleur de surlignage
         /// </summary>
-        public void SetHighlightColor(Color fillColor, Color outlineColor)
+        public void SetHighlightColor(Color color)
         {
-            _fillColor = fillColor;
-            _outlineColor = outlineColor;
+            _highlightColor = color;
 
-            if (_fillMaterial != null)
-                _fillMaterial.color = _fillColor;
-
-            if (_outlineMaterial != null)
-                _outlineMaterial.color = _outlineColor;
+            if (_projectorMaterial != null)
+            {
+                _projectorMaterial.SetColor("_Color", _highlightColor);
+            }
         }
 
-        private void CreateFillMesh(ParcelModel parcel)
+        private void GenerateParcelTexture(Vector3[] worldPositions, Bounds bounds)
         {
-            Debug.Log("[ParcelHighlighter.CreateFillMesh] Création du GameObject...");
-            _currentFillObject = new GameObject("ParcelFill");
-            _currentFillObject.transform.SetParent(_highlightParent);
-            Debug.Log(string.Format("[ParcelHighlighter.CreateFillMesh] GameObject créé, parent: {0}", _highlightParent != null ? _highlightParent.name : "NULL"));
+            // Utiliser une taille de bounds carrée pour éviter la déformation
+            float sizeA = bounds.size.x;
+            float sizeB = _isXYPlane ? bounds.size.y : bounds.size.z;
+            float maxSize = Mathf.Max(sizeA, sizeB);
+            Vector3 squareCenter = bounds.center;
 
-            var meshFilter = _currentFillObject.AddComponent<MeshFilter>();
-            var meshRenderer = _currentFillObject.AddComponent<MeshRenderer>();
-            Debug.Log("[ParcelHighlighter.CreateFillMesh] MeshFilter et MeshRenderer ajoutés");
+            Debug.Log(string.Format("[ParcelHighlighter] Orientation: {0}, sizeA={1}, sizeB={2}, maxSize={3}",
+                _isXYPlane ? "XY" : "XZ", sizeA, sizeB, maxSize));
 
-            // Convertir les coordonnées GPS en positions monde
-            var worldPositions = ConvertToWorldPositions(parcel.Geometry);
+            // Créer une nouvelle texture
+            _parcelTexture = new Texture2D(_textureResolution, _textureResolution, TextureFormat.ARGB32, false);
+            _parcelTexture.wrapMode = TextureWrapMode.Clamp;
+            _parcelTexture.filterMode = FilterMode.Bilinear;
 
-            // Vérifier que la conversion a réussi
-            if (worldPositions.Length == 0 || worldPositions[0] == Vector3.zero)
+            // Remplir avec du transparent
+            var clearColor = new Color(0, 0, 0, 0);
+            var fillColor = Color.white; // Blanc pour le masque, la couleur vient du shader
+            var pixels = new Color[_textureResolution * _textureResolution];
+            for (int i = 0; i < pixels.Length; i++)
             {
-                Debug.LogError("[ParcelHighlighter.CreateFillMesh] Échec de conversion des coordonnées GPS!");
-                return;
+                pixels[i] = clearColor;
             }
 
-            // Créer le mesh à partir des positions monde
-            Debug.Log("[ParcelHighlighter.CreateFillMesh] Appel de CreatePolygonMeshFromWorldPositions...");
-            var mesh = CreatePolygonMeshFromWorldPositions(worldPositions);
-            Debug.Log(string.Format("[ParcelHighlighter.CreateFillMesh] Mesh créé - Vertices: {0}, Triangles: {1}",
-                mesh.vertexCount, mesh.triangles.Length / 3));
-            meshFilter.mesh = mesh;
-
-            // Appliquer le matériau
-            var mat = new Material(_fillMaterial);
-            mat.color = _fillColor;
-            meshRenderer.material = mat;
-            Debug.Log(string.Format("[ParcelHighlighter.CreateFillMesh] Matériau appliqué - Couleur: {0}, Shader: {1}",
-                _fillColor, mat.shader.name));
-
-            // Le mesh utilise des coordonnées monde (les vertices sont déjà élevés)
-            // L'objet reste à l'origine
-            _currentFillObject.transform.position = Vector3.zero;
-            Debug.Log(string.Format("[ParcelHighlighter.CreateFillMesh] Position mondiale: {0}", _currentFillObject.transform.position));
-            Debug.Log(string.Format("[ParcelHighlighter.CreateFillMesh] Mesh bounds: {0}", mesh.bounds));
-            Debug.Log(string.Format("[ParcelHighlighter.CreateFillMesh] Active: {0}", _currentFillObject.activeSelf));
-        }
-
-        private void CreateOutline(ParcelModel parcel)
-        {
-            Debug.Log("[ParcelHighlighter.CreateOutline] Création du GameObject...");
-            _currentOutlineObject = new GameObject("ParcelOutline");
-            _currentOutlineObject.transform.SetParent(_highlightParent);
-
-            var lineRenderer = _currentOutlineObject.AddComponent<LineRenderer>();
-            Debug.Log("[ParcelHighlighter.CreateOutline] LineRenderer ajouté");
-
-            // Configurer le LineRenderer - utiliser worldSpace car les positions sont en coordonnées monde
-            lineRenderer.material = _outlineMaterial;
-            lineRenderer.startColor = _outlineColor;
-            lineRenderer.endColor = _outlineColor;
-            lineRenderer.startWidth = _outlineWidth;
-            lineRenderer.endWidth = _outlineWidth;
-            lineRenderer.useWorldSpace = true; // Utiliser les coordonnées monde de Mapbox
-            lineRenderer.loop = true;
-            Debug.Log(string.Format("[ParcelHighlighter.CreateOutline] LineRenderer configuré - Couleur: {0}, Width: {1}",
-                _outlineColor, _outlineWidth));
-
-            // Définir les points du contour en coordonnées monde
-            var points = ConvertToWorldPositions(parcel.Geometry);
-
-            // Vérifier que la conversion a réussi
-            if (points.Length == 0 || points[0] == Vector3.zero)
-            {
-                Debug.LogError("[ParcelHighlighter.CreateOutline] Échec de conversion des coordonnées GPS!");
-                return;
-            }
-
-            // Élever les points légèrement au-dessus de la carte
-            for (int i = 0; i < points.Length; i++)
-            {
-                points[i].y += _highlightHeight + 0.001f;
-            }
-
-            lineRenderer.positionCount = points.Length;
-            lineRenderer.SetPositions(points);
-            Debug.Log(string.Format("[ParcelHighlighter.CreateOutline] Points du contour: {0}", points.Length));
-            if (points.Length > 0)
-            {
-                Debug.Log(string.Format("[ParcelHighlighter.CreateOutline] Premier point: {0}, Dernier point: {1}",
-                    points[0], points[points.Length - 1]));
-            }
-
-            Debug.Log(string.Format("[ParcelHighlighter.CreateOutline] Active: {0}", _currentOutlineObject.activeSelf));
-        }
-
-        private Mesh CreatePolygonMeshFromWorldPositions(Vector3[] worldPositions)
-        {
-            var mesh = new Mesh();
-
-            // Élever les vertices légèrement au-dessus de la carte
-            var vertices = new Vector3[worldPositions.Length];
+            // Convertir les positions monde en coordonnées UV (0-1) dans un carré centré
+            var uvPoints = new Vector2[worldPositions.Length];
             for (int i = 0; i < worldPositions.Length; i++)
             {
-                vertices[i] = worldPositions[i];
-                vertices[i].y += _highlightHeight;
+                // Centrer sur le milieu du carré et normaliser
+                float u = (worldPositions[i].x - squareCenter.x) / maxSize + 0.5f;
+                float v;
+                if (_isXYPlane)
+                {
+                    // Carte dans le plan XY
+                    v = (worldPositions[i].y - squareCenter.y) / maxSize + 0.5f;
+                }
+                else
+                {
+                    // Carte dans le plan XZ
+                    v = (worldPositions[i].z - squareCenter.z) / maxSize + 0.5f;
+                }
+                uvPoints[i] = new Vector2(u, v);
             }
 
-            // Triangulation simple (fan triangulation - fonctionne pour les polygones convexes)
-            // Pour les polygones complexes, utiliser une librairie de triangulation
-            var triangles = new List<int>();
-            for (int i = 1; i < vertices.Length - 1; i++)
+            Debug.Log(string.Format("[ParcelHighlighter] UV Points: premier={0}, dernier={1}",
+                uvPoints[0], uvPoints[uvPoints.Length - 1]));
+
+            // Dessiner le polygone rempli sur la texture
+            FillPolygon(pixels, uvPoints, fillColor);
+
+            // Appliquer les pixels à la texture
+            _parcelTexture.SetPixels(pixels);
+            _parcelTexture.Apply();
+
+            // Assigner la texture au material du Projector
+            _projectorMaterial.SetTexture("_ShadowTex", _parcelTexture);
+
+            Debug.Log(string.Format("[ParcelHighlighter] Texture générée: {0}x{0}, maxSize={1}",
+                _textureResolution, maxSize));
+        }
+
+        private void FillPolygon(Color[] pixels, Vector2[] uvPoints, Color fillColor)
+        {
+            int width = _textureResolution;
+            int height = _textureResolution;
+
+            // Utiliser un algorithme point-in-polygon plus robuste
+            for (int y = 0; y < height; y++)
             {
-                triangles.Add(0);
-                triangles.Add(i);
-                triangles.Add(i + 1);
+                for (int x = 0; x < width; x++)
+                {
+                    // Convertir pixel en coordonnées UV
+                    float u = (x + 0.5f) / width;
+                    float v = (y + 0.5f) / height;
+
+                    if (IsPointInPolygon(u, v, uvPoints))
+                    {
+                        pixels[y * width + x] = fillColor;
+                    }
+                }
+            }
+        }
+
+        private bool IsPointInPolygon(float x, float y, Vector2[] polygon)
+        {
+            // Algorithme ray casting (plus robuste que scanline)
+            bool inside = false;
+            int n = polygon.Length;
+
+            for (int i = 0, j = n - 1; i < n; j = i++)
+            {
+                float xi = polygon[i].x, yi = polygon[i].y;
+                float xj = polygon[j].x, yj = polygon[j].y;
+
+                // Vérifier si le rayon horizontal vers la droite croise ce segment
+                if (((yi > y) != (yj > y)) &&
+                    (x < (xj - xi) * (y - yi) / (yj - yi) + xi))
+                {
+                    inside = !inside;
+                }
             }
 
-            mesh.vertices = vertices;
-            mesh.triangles = triangles.ToArray();
-            mesh.RecalculateNormals();
-            mesh.RecalculateBounds();
+            return inside;
+        }
 
-            Debug.Log(string.Format("[ParcelHighlighter.CreatePolygonMesh] Bounds: center={0}, size={1}",
-                mesh.bounds.center, mesh.bounds.size));
+        #region Douglas-Peucker Simplification
 
-            return mesh;
+        /// <summary>
+        /// Simplifie un polygone avec l'algorithme Douglas-Peucker
+        /// </summary>
+        private Vector3[] SimplifyPolygon(Vector3[] points, float tolerance)
+        {
+            if (points.Length < 3)
+                return points;
+
+            // Douglas-Peucker pour une ligne ouverte
+            var simplified = DouglasPeucker(new List<Vector3>(points), tolerance);
+
+            // S'assurer qu'on a au moins 3 points
+            if (simplified.Count < 3)
+                return points;
+
+            return simplified.ToArray();
+        }
+
+        private List<Vector3> DouglasPeucker(List<Vector3> points, float tolerance)
+        {
+            if (points.Count < 3)
+                return points;
+
+            // Trouver le point le plus éloigné de la ligne entre le premier et le dernier
+            float maxDistance = 0f;
+            int maxIndex = 0;
+
+            Vector3 first = points[0];
+            Vector3 last = points[points.Count - 1];
+
+            for (int i = 1; i < points.Count - 1; i++)
+            {
+                float distance = PerpendicularDistance(points[i], first, last);
+                if (distance > maxDistance)
+                {
+                    maxDistance = distance;
+                    maxIndex = i;
+                }
+            }
+
+            // Si la distance max est supérieure à la tolérance, on subdivise
+            if (maxDistance > tolerance)
+            {
+                // Récursion sur les deux parties
+                var leftPart = DouglasPeucker(points.GetRange(0, maxIndex + 1), tolerance);
+                var rightPart = DouglasPeucker(points.GetRange(maxIndex, points.Count - maxIndex), tolerance);
+
+                // Combiner (sans dupliquer le point de jonction)
+                var result = new List<Vector3>(leftPart);
+                result.RemoveAt(result.Count - 1);
+                result.AddRange(rightPart);
+                return result;
+            }
+            else
+            {
+                // Simplifier à une ligne droite
+                return new List<Vector3> { first, last };
+            }
+        }
+
+        private float PerpendicularDistance(Vector3 point, Vector3 lineStart, Vector3 lineEnd)
+        {
+            // Distance perpendiculaire d'un point à une ligne (en 2D sur le plan de la carte)
+            float dx = lineEnd.x - lineStart.x;
+            float dy = _isXYPlane ? (lineEnd.y - lineStart.y) : (lineEnd.z - lineStart.z);
+
+            float px = point.x - lineStart.x;
+            float py = _isXYPlane ? (point.y - lineStart.y) : (point.z - lineStart.z);
+
+            float lineLengthSq = dx * dx + dy * dy;
+
+            if (lineLengthSq == 0f)
+            {
+                // lineStart == lineEnd
+                return Mathf.Sqrt(px * px + py * py);
+            }
+
+            // Projection du point sur la ligne
+            float t = Mathf.Clamp01((px * dx + py * dy) / lineLengthSq);
+            float projX = lineStart.x + t * dx;
+            float projY = (_isXYPlane ? lineStart.y : lineStart.z) + t * dy;
+
+            float distX = point.x - projX;
+            float distY = (_isXYPlane ? point.y : point.z) - projY;
+
+            return Mathf.Sqrt(distX * distX + distY * distY);
+        }
+
+        #endregion
+
+        private void ConfigureProjector(Bounds bounds)
+        {
+            // Utiliser une taille carrée (même logique que la texture)
+            float sizeA = bounds.size.x;
+            float sizeB = _isXYPlane ? bounds.size.y : bounds.size.z;
+            float maxSize = Mathf.Max(sizeA, sizeB);
+            float padding = maxSize * _boundsPadding;
+            float halfSize = maxSize / 2f + padding;
+
+            // Configurer la taille du Projector (carré, aspect ratio 1:1)
+            _projector.orthographicSize = halfSize;
+            _projector.aspectRatio = 1f;
+
+            // Positionner et orienter le Projector selon l'orientation de la carte
+            Vector3 projectorPos = bounds.center;
+
+            if (_isXYPlane)
+            {
+                // Carte dans le plan XY → Projector pointe vers Z négatif
+                projectorPos.z = bounds.min.z - _projectorHeight;
+                _projectorObject.transform.position = projectorPos;
+                _projectorObject.transform.rotation = Quaternion.Euler(0f, 0f, 0f);
+            }
+            else
+            {
+                // Carte dans le plan XZ → Projector pointe vers Y négatif
+                projectorPos.y = bounds.max.y + _projectorHeight;
+                _projectorObject.transform.position = projectorPos;
+                _projectorObject.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
+            }
+
+            Debug.Log(string.Format("[ParcelHighlighter] Projector configuré: pos={0}, halfSize={1}, farClip={2}, isXY={3}",
+                projectorPos, halfSize, _projector.farClipPlane, _isXYPlane));
+        }
+
+        private Bounds CalculateBounds(Vector3[] positions)
+        {
+            if (positions.Length == 0)
+                return new Bounds();
+
+            var bounds = new Bounds(positions[0], Vector3.zero);
+            for (int i = 1; i < positions.Length; i++)
+            {
+                bounds.Encapsulate(positions[i]);
+            }
+            return bounds;
         }
 
         private Vector3[] ConvertToWorldPositions(Vector2[] geometry)
@@ -297,70 +475,41 @@ namespace GeoscaleCadastre.Map
 
         private Vector3 ConvertGpsToWorld(Vector2 gpsCoord)
         {
-            // Utiliser MapManager pour une conversion précise via Mapbox SDK
             if (_mapManager == null)
             {
-                Debug.LogError("[ParcelHighlighter.ConvertGpsToWorld] MapManager non assigné dans l'Inspector!");
+                Debug.LogError("[ParcelHighlighter] MapManager non assigné!");
                 return Vector3.zero;
             }
 
             Vector3 worldPos;
-            // gpsCoord.x = longitude, gpsCoord.y = latitude
             double lat = gpsCoord.y;
             double lng = gpsCoord.x;
 
-            Debug.Log(string.Format("[ParcelHighlighter.ConvertGpsToWorld] Tentative conversion GPS: lat={0:F6}, lng={1:F6}", lat, lng));
-
             if (_mapManager.TryGeoToWorldPosition(lat, lng, out worldPos))
             {
-                Debug.Log(string.Format("[ParcelHighlighter.ConvertGpsToWorld] SUCCÈS: GPS ({0:F6}, {1:F6}) -> World {2}",
-                    lat, lng, worldPos));
                 return worldPos;
             }
             else
             {
-                Debug.LogError(string.Format("[ParcelHighlighter.ConvertGpsToWorld] ÉCHEC conversion via MapManager pour GPS ({0:F6}, {1:F6})",
+                Debug.LogError(string.Format("[ParcelHighlighter] Échec conversion GPS ({0:F6}, {1:F6})",
                     lat, lng));
                 return Vector3.zero;
             }
         }
 
-        private Material CreateDefaultFillMaterial()
-        {
-            // Créer un matériau transparent basique
-            var shader = Shader.Find("Standard");
-            if (shader == null) shader = Shader.Find("Sprites/Default");
-
-            var mat = new Material(shader);
-            mat.color = _fillColor;
-
-            // Configurer pour la transparence
-            mat.SetFloat("_Mode", 3); // Transparent
-            mat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
-            mat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
-            mat.SetInt("_ZWrite", 0);
-            mat.DisableKeyword("_ALPHATEST_ON");
-            mat.EnableKeyword("_ALPHABLEND_ON");
-            mat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
-            mat.renderQueue = 3000;
-
-            return mat;
-        }
-
-        private Material CreateDefaultOutlineMaterial()
-        {
-            var shader = Shader.Find("Sprites/Default");
-            if (shader == null) shader = Shader.Find("Standard");
-
-            var mat = new Material(shader);
-            mat.color = _outlineColor;
-
-            return mat;
-        }
-
         private void OnDestroy()
         {
             ClearHighlight();
+
+            if (_projectorMaterial != null)
+            {
+                Destroy(_projectorMaterial);
+            }
+
+            if (_projectorObject != null)
+            {
+                Destroy(_projectorObject);
+            }
         }
     }
 }
