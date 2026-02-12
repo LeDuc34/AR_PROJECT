@@ -113,6 +113,14 @@ namespace GeoscaleCadastre
                 _mapManager.Initialize(_initialLatitude, _initialLongitude, _initialZoom);
             }
 
+            // Créer le ParcelInfoPanel si non assigné
+            if (_parcelInfoPanel == null)
+            {
+                var panelGo = new GameObject("ParcelInfoPanel");
+                _parcelInfoPanel = panelGo.AddComponent<ParcelInfoPanel>();
+                LogDebug("ParcelInfoPanel créé automatiquement");
+            }
+
             // S'abonner aux événements
             SubscribeToEvents();
 
@@ -274,11 +282,23 @@ namespace GeoscaleCadastre
         private void OnParcelSelected(ParcelModel parcel)
         {
             LogDebug(string.Format("Parcelle sélectionnée: {0}", parcel.GetFormattedId()));
+
+            // Afficher le panel d'infos parcelle
+            if (_parcelInfoPanel != null)
+            {
+                _parcelInfoPanel.DisplayParcelInfo(parcel);
+            }
         }
 
         private void OnSelectionCleared()
         {
             LogDebug("Sélection effacée");
+
+            // Masquer le panel d'infos parcelle
+            if (_parcelInfoPanel != null)
+            {
+                _parcelInfoPanel.Hide();
+            }
         }
 
         #endregion

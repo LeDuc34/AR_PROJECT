@@ -74,7 +74,18 @@ namespace GeoscaleCadastre.Map
         private void CreateProjector()
         {
             _projectorObject = new GameObject("ParcelProjector");
-            _projectorObject.transform.SetParent(transform);
+
+            // Parenter le projector à l'objet qui se déplace lors du drag
+            // pour que le highlight suive la carte
+            var interactionHandler = FindObjectOfType<MapInteractionHandler>();
+            if (interactionHandler != null)
+            {
+                _projectorObject.transform.SetParent(interactionHandler.transform);
+            }
+            else
+            {
+                _projectorObject.transform.SetParent(transform);
+            }
 
             _projector = _projectorObject.AddComponent<Projector>();
 

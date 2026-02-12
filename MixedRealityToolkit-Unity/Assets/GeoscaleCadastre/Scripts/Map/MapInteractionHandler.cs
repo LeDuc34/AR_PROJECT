@@ -45,8 +45,8 @@ namespace GeoscaleCadastre.Map
         private float _zoomSensitivity = 1f;
 
         [SerializeField]
-        [Tooltip("Sensibilité du pan")]
-        private float _panSensitivity = 0.001f;
+        [Tooltip("Multiplicateur de déplacement de la carte (1 = 1:1 avec la main, 3 = 3x plus rapide)")]
+        private float _panSensitivity = 3f;
 
         // État pour les interactions pointeur
         private bool _isManipulating;
@@ -54,8 +54,12 @@ namespace GeoscaleCadastre.Map
         private Vector3 _lastPointerPosition;
         private Vector3 _pointerDownPosition;
         private float _pointerDownTime;
-        private const float TAP_TIME_THRESHOLD = 0.3f; // 300ms max pour un tap
-        private const float TAP_DISTANCE_THRESHOLD = 0.05f; // 5cm max de mouvement
+        private const float TAP_TIME_THRESHOLD = 0.5f; // 500ms max pour un tap
+        private const float TAP_DISTANCE_THRESHOLD = 0.15f; // 15cm max de mouvement (la main simulée bouge facilement)
+
+        // Plan de la carte pour projection ray-plan (robuste pour le drag)
+        private Plane _mapPlane;
+        private bool _mapPlaneInitialized;
 
         // État pour les interactions tactiles (pincement)
         private Vector3 _lastTouchPosition;
@@ -144,58 +148,54 @@ namespace GeoscaleCadastre.Map
         private void Start()
         {
             // Recalculer le collider après l'initialisation de la carte
-            // (les tiles Mapbox peuvent ne pas être chargées dans Awake)
             Invoke("RefreshColliderSize", 0.5f);
 
-            // === DEBUG: Vérification des références au démarrage ===
+            // Initialiser le plan de la carte pour le ray-plane intersection
+            UpdateMapPlane();
+
             Debug.Log("=== [MapInteractionHandler] DEBUG START ===");
-            Debug.Log(string.Format("[MapInteractionHandler] GameObject: {0}", gameObject.name));
-            Debug.Log(string.Format("[MapInteractionHandler] _parcelSelectionHandler: {0}", _parcelSelectionHandler != null ? "OK" : "NULL"));
-            Debug.Log(string.Format("[MapInteractionHandler] _mapManager: {0}", _mapManager != null ? "OK" : "NULL"));
-            Debug.Log(string.Format("[MapInteractionHandler] _enableSelection: {0}", _enableSelection));
-            Debug.Log(string.Format("[MapInteractionHandler] _enablePan: {0}", _enablePan));
-            Debug.Log(string.Format("[MapInteractionHandler] _enableZoom: {0}", _enableZoom));
+            Debug.Log(string.Format("[MapInteractionHandler] _mapManager: {0}, _enablePan: {1}",
+                _mapManager != null ? "OK" : "NULL", _enablePan));
+            Debug.Log(string.Format("[MapInteractionHandler] _useGlobalHandler={0}, _mapCheckTolerance={1}m",
+                _useGlobalHandler, _mapCheckTolerance));
+            Debug.Log(string.Format("[MapInteractionHandler] MapPlane normal: {0}, position: {1}",
+                transform.up, transform.position));
+            Debug.Log("=== [MapInteractionHandler] DEBUG END ===");
+        }
 
-            // Vérifier le collider
-            var collider = GetComponent<Collider>();
-            Debug.Log(string.Format("[MapInteractionHandler] Collider: {0}", collider != null ? collider.GetType().Name + " enabled=" + collider.enabled : "NULL"));
+        /// <summary>
+        /// Met à jour le plan horizontal de la carte (pour le ray-plane intersection)
+        /// </summary>
+        private void UpdateMapPlane()
+        {
+            _mapPlane = new Plane(transform.up, transform.position);
+            _mapPlaneInitialized = true;
+        }
 
-            // Vérifier NearInteractionGrabbable
-            var nearGrab = GetComponent<NearInteractionGrabbable>();
-            Debug.Log(string.Format("[MapInteractionHandler] NearInteractionGrabbable: {0}", nearGrab != null ? "OK" : "NULL"));
+        /// <summary>
+        /// Projette le ray du pointeur MRTK sur le plan de la carte.
+        /// Beaucoup plus robuste que Pointer.Result.Details.Point qui ne bouge pas pendant un drag simulé.
+        /// </summary>
+        private bool TryGetPointOnMapPlane(IMixedRealityPointer pointer, out Vector3 pointOnPlane)
+        {
+            pointOnPlane = Vector3.zero;
 
-            // Vérifier si MRTK Input System est actif
-            var inputSystem = CoreServices.InputSystem;
-            Debug.Log(string.Format("[MapInteractionHandler] MRTK InputSystem: {0}", inputSystem != null ? "OK" : "NULL"));
+            if (!_mapPlaneInitialized)
+                UpdateMapPlane();
 
-            // Vérifier le GazeProvider
-            var gazeProvider = inputSystem?.GazeProvider;
-            Debug.Log(string.Format("[MapInteractionHandler] GazeProvider: {0}", gazeProvider != null ? "OK" : "NULL"));
-
-            // Vérifier le layer
-            Debug.Log(string.Format("[MapInteractionHandler] Layer: {0} ({1})", gameObject.layer, LayerMask.LayerToName(gameObject.layer)));
-
-            // Vérifier si on est bien enregistré pour les événements
-            Debug.Log(string.Format("[MapInteractionHandler] Interfaces implémentées: IMixedRealityPointerHandler={0}, IMixedRealityFocusHandler={1}",
-                this is IMixedRealityPointerHandler,
-                this is IMixedRealityFocusHandler));
-
-            // Debug settings
-            Debug.Log(string.Format("[MapInteractionHandler] DEBUG SETTINGS: _useGlobalHandler={0}, _bypassMapCheck={1}, _mapCheckTolerance={2}m",
-                _useGlobalHandler, _bypassMapCheck, _mapCheckTolerance));
-
-            // Log collider bounds in world space
-            var col = GetComponent<Collider>();
-            if (col != null)
+            // Utiliser le ray du pointeur
+            if (pointer.Rays != null && pointer.Rays.Length > 0)
             {
-                Bounds worldBounds = col.bounds;
-                Debug.Log(string.Format("[MapInteractionHandler] Collider WORLD bounds: center={0}, size={1}",
-                    worldBounds.center, worldBounds.size));
-                Debug.Log(string.Format("[MapInteractionHandler] Collider WORLD bounds: min={0}, max={1}",
-                    worldBounds.min, worldBounds.max));
+                Ray ray = new Ray(pointer.Rays[0].Origin, pointer.Rays[0].Direction);
+                float enter;
+                if (_mapPlane.Raycast(ray, out enter))
+                {
+                    pointOnPlane = ray.GetPoint(enter);
+                    return true;
+                }
             }
 
-            Debug.Log("=== [MapInteractionHandler] DEBUG END ===");
+            return false;
         }
 
         private void Update()
@@ -476,64 +476,43 @@ namespace GeoscaleCadastre.Map
 
         void IMixedRealityPointerHandler.OnPointerDown(MixedRealityPointerEventData eventData)
         {
-            string targetName = eventData.Pointer.Result?.CurrentPointerTarget != null
-                ? eventData.Pointer.Result.CurrentPointerTarget.name
-                : "NULL";
-
-            Debug.Log(string.Format("[MapInteractionHandler] >>> OnPointerDown - Pointer: {0}, Target: {1}, ThisObject: {2}",
-                eventData.Pointer.PointerName, targetName, gameObject.name));
-
             if (IsPointerTargetingUs(eventData))
             {
-                _lastPointerPosition = eventData.Pointer.Result.Details.Point;
-                _pointerDownPosition = _lastPointerPosition; // Sauvegarder la position initiale
-                _pointerDownTime = Time.time; // Sauvegarder le temps
+                // Utiliser Pointer.Position (position de la main) car Result.Details.Point est sticky pendant le grab
+                _lastPointerPosition = eventData.Pointer.Position;
+                _pointerDownPosition = _lastPointerPosition;
+                _pointerDownTime = Time.time;
                 _isManipulating = true;
-                Debug.Log(string.Format("[MapInteractionHandler] OnPointerDown ACCEPTED - Position: {0}, Time: {1}, isManipulating: {2}",
-                    _lastPointerPosition, _pointerDownTime, _isManipulating));
-            }
-            else
-            {
-                Debug.Log("[MapInteractionHandler] OnPointerDown IGNORED - pas sur la carte");
+                Debug.Log(string.Format("[MapInteractionHandler] OnPointerDown ACCEPTED - HandPos: {0}", _lastPointerPosition));
             }
         }
 
         void IMixedRealityPointerHandler.OnPointerUp(MixedRealityPointerEventData eventData)
         {
-            Debug.Log(string.Format("[MapInteractionHandler] >>> OnPointerUp - wasManipulating: {0}", _isManipulating));
-
-            // Vérifier si c'était un TAP (clic rapide sans mouvement) plutôt qu'un DRAG
-            if (_isManipulating && eventData.Pointer.Result != null)
+            if (_isManipulating)
             {
-                Vector3 upPosition = eventData.Pointer.Result.Details.Point;
+                Vector3 upPosition = eventData.Pointer.Position;
                 float distance = Vector3.Distance(_pointerDownPosition, upPosition);
                 float duration = Time.time - _pointerDownTime;
 
-                Debug.Log(string.Format("[MapInteractionHandler] OnPointerUp - Distance: {0:F4}m, Duration: {1:F3}s", distance, duration));
-                Debug.Log(string.Format("[MapInteractionHandler] OnPointerUp - DownPos: {0}, UpPos: {1}", _pointerDownPosition, upPosition));
+                Debug.Log(string.Format("[MapInteractionHandler] OnPointerUp - HandDist: {0:F4}m, Duration: {1:F3}s", distance, duration));
 
-                // Si le mouvement est très faible et rapide, c'est un TAP -> sélectionner la parcelle
+                // TAP = mouvement faible ET rapide
                 if (distance < TAP_DISTANCE_THRESHOLD && duration < TAP_TIME_THRESHOLD)
                 {
-                    Debug.Log("[MapInteractionHandler] OnPointerUp - DÉTECTÉ COMME TAP -> Sélection de parcelle");
-
+                    Debug.Log("[MapInteractionHandler] DÉTECTÉ COMME TAP -> Sélection");
                     if (_enableSelection && _parcelSelectionHandler != null)
                     {
-                        Debug.Log(string.Format("[MapInteractionHandler] OnPointerUp - Appel SelectParcelAtWorldPosition({0})", upPosition));
-                        _parcelSelectionHandler.OnMRTKPointerClicked(upPosition);
-                    }
-                    else
-                    {
-                        if (!_enableSelection)
-                            Debug.LogWarning("[MapInteractionHandler] OnPointerUp - Sélection désactivée");
-                        if (_parcelSelectionHandler == null)
-                            Debug.LogError("[MapInteractionHandler] OnPointerUp - _parcelSelectionHandler est NULL");
+                        // Pour la sélection, utiliser le hit point initial (là où le ray a touché la carte)
+                        Vector3 hitPoint = eventData.Pointer.Result != null
+                            ? eventData.Pointer.Result.Details.Point
+                            : upPosition;
+                        _parcelSelectionHandler.OnMRTKPointerClicked(hitPoint);
                     }
                 }
                 else
                 {
-                    Debug.Log(string.Format("[MapInteractionHandler] OnPointerUp - DÉTECTÉ COMME DRAG (distance: {0:F4} >= {1} OU duration: {2:F3} >= {3})",
-                        distance, TAP_DISTANCE_THRESHOLD, duration, TAP_TIME_THRESHOLD));
+                    Debug.Log(string.Format("[MapInteractionHandler] DÉTECTÉ COMME DRAG (dist: {0:F4}, dur: {1:F3})", distance, duration));
                 }
             }
 
@@ -542,76 +521,27 @@ namespace GeoscaleCadastre.Map
 
         void IMixedRealityPointerHandler.OnPointerClicked(MixedRealityPointerEventData eventData)
         {
-            string targetName = eventData.Pointer.Result?.CurrentPointerTarget != null
-                ? eventData.Pointer.Result.CurrentPointerTarget.name
-                : "NULL";
-
-            Debug.Log(string.Format("[MapInteractionHandler] >>> OnPointerClicked - enableSelection: {0}, Pointer: {1}, Target: {2}",
-                _enableSelection, eventData.Pointer.PointerName, targetName));
-
-            if (!_enableSelection)
-            {
-                Debug.Log("[MapInteractionHandler] OnPointerClicked IGNORED - selection disabled");
-                return;
-            }
-
-            // Vérifier si on clique sur la carte
-            if (!IsPointerTargetingUs(eventData))
-            {
-                Debug.Log("[MapInteractionHandler] OnPointerClicked IGNORED - pas sur la carte");
-                return;
-            }
-
-            Vector3 hitPoint = eventData.Pointer.Result.Details.Point;
-            Debug.Log(string.Format("[MapInteractionHandler] OnPointerClicked ACCEPTED - HitPoint: {0}", hitPoint));
-
-            if (_parcelSelectionHandler != null)
-            {
-                Debug.Log("[MapInteractionHandler] Calling _parcelSelectionHandler.OnMRTKPointerClicked...");
-                _parcelSelectionHandler.OnMRTKPointerClicked(hitPoint);
-            }
-            else
-            {
-                Debug.LogError("[MapInteractionHandler] _parcelSelectionHandler is NULL!");
-            }
-
-            // Marquer l'événement comme utilisé
-            eventData.Use();
+            // La sélection est gérée dans OnPointerUp pour éviter les doubles appels
         }
 
         void IMixedRealityPointerHandler.OnPointerDragged(MixedRealityPointerEventData eventData)
         {
-            if (_isManipulating && _enablePan)
-            {
-                Vector3 position = eventData.Pointer.Result.Details.Point;
-                Vector3 delta = position - _lastPointerPosition;
+            if (!_isManipulating || !_enablePan) return;
 
-                if (delta.magnitude > 0.001f)
-                {
-                    Debug.Log(string.Format("[MapInteractionHandler] >>> OnPointerDragged - Delta: {0}, Magnitude: {1:F4}",
-                        delta, delta.magnitude));
-                }
+            // Utiliser Pointer.Position (position de la main) qui bouge réellement pendant le drag
+            Vector3 handPosition = eventData.Pointer.Position;
+            Vector3 delta = handPosition - _lastPointerPosition;
+            _lastPointerPosition = handPosition;
 
-                _lastPointerPosition = position;
+            // Filtrer le jitter
+            if (delta.magnitude < 0.0005f) return;
 
-                if (_mapManager != null)
-                {
-                    double latDelta = delta.z * _panSensitivity;
-                    double lngDelta = delta.x * _panSensitivity;
+            // Déplacer tout le conteneur de la carte (tiles + highlight + services)
+            // pour que tout reste synchronisé
+            transform.position += delta * 5f;
 
-                    Debug.Log(string.Format("[MapInteractionHandler] Pan - latDelta: {0:F6}, lngDelta: {1:F6}", latDelta, lngDelta));
-
-                    _mapManager.SetPosition(
-                        _mapManager.CurrentLatitude - latDelta,
-                        _mapManager.CurrentLongitude - lngDelta,
-                        _mapManager.CurrentZoom
-                    );
-                }
-                else
-                {
-                    Debug.LogError("[MapInteractionHandler] OnPointerDragged - _mapManager is NULL!");
-                }
-            }
+            Debug.Log(string.Format("[MapInteractionHandler] Pan - delta: ({0:F4}, {1:F4}, {2:F4})",
+                delta.x, delta.y, delta.z));
         }
 
         #endregion
@@ -630,12 +560,10 @@ namespace GeoscaleCadastre.Map
         void IMixedRealityFocusHandler.OnFocusExit(FocusEventData eventData)
         {
             _isFocused = false;
-            _isManipulating = false;
+            // Ne PAS reset _isManipulating ici — pendant un drag, le ray courbe et
+            // le focus peut quitter le collider. Le drag doit continuer jusqu'à OnPointerUp.
             _isTouching = false;
-            Debug.Log(string.Format("[MapInteractionHandler] === FOCUS EXIT === Pointer: {0}, OldTarget: {1}, NewTarget: {2}",
-                eventData.Pointer != null ? eventData.Pointer.PointerName : "NULL",
-                eventData.OldFocusedObject != null ? eventData.OldFocusedObject.name : "NULL",
-                eventData.NewFocusedObject != null ? eventData.NewFocusedObject.name : "NULL"));
+            Debug.Log(string.Format("[MapInteractionHandler] === FOCUS EXIT === isManipulating maintenu: {0}", _isManipulating));
         }
 
         #endregion

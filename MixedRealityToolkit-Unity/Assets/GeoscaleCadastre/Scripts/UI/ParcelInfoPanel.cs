@@ -3,191 +3,59 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using GeoscaleCadastre.Models;
-using GeoscaleCadastre.Parcel;
-using Microsoft.MixedReality.Toolkit;
-using Microsoft.MixedReality.Toolkit.Input;
 
 namespace GeoscaleCadastre.UI
 {
     /// <summary>
-    /// Panel d'affichage des informations d'une parcelle sélectionnée
-    /// Affiche les données de base: section, numéro, commune, surface
-    /// Implémente IMixedRealitySpeechHandler pour les commandes vocales
+    /// Panel d'affichage des informations d'une parcelle selectionnee.
+    /// Construit son UI automatiquement au runtime (pas besoin de prefab).
+    /// Se positionne devant la camera quand il s'affiche.
     /// </summary>
-    public class ParcelInfoPanel : MonoBehaviour, IMixedRealitySpeechHandler
+    public class ParcelInfoPanel : MonoBehaviour
     {
-        [Header("Références UI - Titre")]
-        [SerializeField]
-        [Tooltip("Titre du panel (ex: 'Parcelle AB 123')")]
-        private TMP_Text _titleText;
-
-        [Header("Références UI - Informations")]
-        [SerializeField]
-        private TMP_Text _communeText;
-
-        [SerializeField]
-        private TMP_Text _sectionText;
-
-        [SerializeField]
-        private TMP_Text _numeroText;
-
-        [SerializeField]
-        private TMP_Text _surfaceText;
-
-        [SerializeField]
-        private TMP_Text _codeInseeText;
-
-        [Header("Références UI - Actions")]
-        [SerializeField]
-        [Tooltip("Bouton pour fermer le panel")]
-        private Button _closeButton;
-
-        [SerializeField]
-        [Tooltip("Bouton pour copier l'IDU")]
-        private Button _copyIduButton;
-
-        [Header("Services")]
-        [SerializeField]
-        private ParcelSelectionHandler _selectionHandler;
-
         [Header("Configuration")]
         [SerializeField]
-        private bool _autoShowOnSelection = true;
+        [Tooltip("Distance du panel devant la camera (metres)")]
+        private float _distanceFromCamera = 0.6f;
 
         [SerializeField]
-        private bool _hideOnClear = true;
+        [Tooltip("Decalage vertical (metres, negatif = plus bas)")]
+        private float _verticalOffset = -0.05f;
 
-        [Header("MRTK Speech")]
-        [SerializeField]
-        [Tooltip("Keyword pour fermer le panel")]
-        private string _closeKeyword = "fermer";
+        // References UI (creees automatiquement)
+        private Canvas _canvas;
+        private RectTransform _panelRect;
+        private TMP_Text _titleText;
+        private TMP_Text _communeText;
+        private TMP_Text _sectionText;
+        private TMP_Text _numeroText;
+        private TMP_Text _surfaceText;
+        private TMP_Text _codeInseeText;
+        private GameObject _panelContainer;
 
-        [SerializeField]
-        [Tooltip("Keyword pour copier l'IDU")]
-        private string _copyKeyword = "copier";
-
-        // Données actuelles
+        // Donnees actuelles
         private ParcelModel _currentParcel;
+        private bool _isBuilt;
+
+        // Couleurs (style MRTK / Geoscale)
+        private static readonly Color BgColor = new Color(0.08f, 0.08f, 0.08f, 0.92f);
+        private static readonly Color AccentColor = new Color(0f, 0.9f, 0.75f, 1f); // Teal
+        private static readonly Color TextColor = new Color(0.93f, 0.9f, 0.89f, 1f);
+        private static readonly Color LabelColor = new Color(0.6f, 0.6f, 0.6f, 1f);
+        private static readonly Color SeparatorColor = new Color(0.3f, 0.3f, 0.3f, 1f);
 
         // Events
         public event Action OnPanelClosed;
-        public event Action<string> OnIduCopied;
 
         private void Awake()
         {
-            // Masquer le panel au départ
-            gameObject.SetActive(false);
+            BuildUI();
+            _panelContainer.SetActive(false);
         }
-
-        private void Start()
-        {
-            // S'enregistrer auprès du système d'input MRTK pour les commandes vocales
-            RegisterSpeechHandler();
-        }
-
-        private void OnEnable()
-        {
-            // S'abonner aux événements de sélection
-            if (_selectionHandler != null)
-            {
-                _selectionHandler.OnParcelSelected += OnParcelSelected;
-                _selectionHandler.OnSelectionCleared += OnSelectionCleared;
-            }
-
-            // Configurer les boutons
-            if (_closeButton != null)
-            {
-                _closeButton.onClick.AddListener(Hide);
-            }
-
-            if (_copyIduButton != null)
-            {
-                _copyIduButton.onClick.AddListener(CopyIdu);
-            }
-
-            // Re-register speech handler when enabled
-            RegisterSpeechHandler();
-        }
-
-        private void OnDisable()
-        {
-            if (_selectionHandler != null)
-            {
-                _selectionHandler.OnParcelSelected -= OnParcelSelected;
-                _selectionHandler.OnSelectionCleared -= OnSelectionCleared;
-            }
-
-            if (_closeButton != null)
-            {
-                _closeButton.onClick.RemoveListener(Hide);
-            }
-
-            if (_copyIduButton != null)
-            {
-                _copyIduButton.onClick.RemoveListener(CopyIdu);
-            }
-
-            // Unregister speech handler when disabled
-            UnregisterSpeechHandler();
-        }
-
-        private void OnDestroy()
-        {
-            UnregisterSpeechHandler();
-        }
-
-        #region Speech Handler Registration
-
-        private void RegisterSpeechHandler()
-        {
-            if (CoreServices.InputSystem != null)
-            {
-                CoreServices.InputSystem.RegisterHandler<IMixedRealitySpeechHandler>(this);
-            }
-        }
-
-        private void UnregisterSpeechHandler()
-        {
-            if (CoreServices.InputSystem != null)
-            {
-                CoreServices.InputSystem.UnregisterHandler<IMixedRealitySpeechHandler>(this);
-            }
-        }
-
-        #endregion
-
-        #region IMixedRealitySpeechHandler Implementation
-
-        void IMixedRealitySpeechHandler.OnSpeechKeywordRecognized(SpeechEventData eventData)
-        {
-            // Vérifier si le panel est actif
-            if (!gameObject.activeInHierarchy)
-                return;
-
-            string keyword = eventData.Command.Keyword;
-
-            // Commande "fermer"
-            if (keyword.Equals(_closeKeyword, StringComparison.OrdinalIgnoreCase))
-            {
-                Debug.Log("[ParcelInfoPanel] Commande vocale: Fermer");
-                Hide();
-                eventData.Use();
-            }
-            // Commande "copier"
-            else if (keyword.Equals(_copyKeyword, StringComparison.OrdinalIgnoreCase))
-            {
-                Debug.Log("[ParcelInfoPanel] Commande vocale: Copier");
-                CopyIdu();
-                eventData.Use();
-            }
-        }
-
-        #endregion
 
         /// <summary>
         /// Affiche les informations d'une parcelle
         /// </summary>
-        /// <param name="parcel">Parcelle à afficher</param>
         public void DisplayParcelInfo(ParcelModel parcel)
         {
             if (parcel == null)
@@ -196,48 +64,26 @@ namespace GeoscaleCadastre.UI
                 return;
             }
 
+            if (!_isBuilt) BuildUI();
+
             _currentParcel = parcel;
 
-            // Mettre à jour le titre
-            if (_titleText != null)
-            {
-                _titleText.text = string.Format("Parcelle {0}", parcel.GetFormattedId());
-            }
+            // Mettre a jour les textes
+            _titleText.text = string.Format("Parcelle {0}", parcel.GetFormattedId());
 
-            // Mettre à jour les informations
-            if (_communeText != null)
-            {
-                _communeText.text = string.Format("Commune: {0}",
-                    string.IsNullOrEmpty(parcel.NomCommune) ? "-" : parcel.NomCommune);
-            }
+            _communeText.text = string.IsNullOrEmpty(parcel.NomCommune) ? "-" : parcel.NomCommune;
+            _sectionText.text = string.IsNullOrEmpty(parcel.Section) ? "-" : parcel.Section;
+            _numeroText.text = string.IsNullOrEmpty(parcel.Numero) ? "-" : parcel.Numero;
+            _surfaceText.text = parcel.GetFormattedSurface();
+            _codeInseeText.text = string.IsNullOrEmpty(parcel.CodeInsee) ? "-" : parcel.CodeInsee;
 
-            if (_sectionText != null)
-            {
-                _sectionText.text = string.Format("Section: {0}",
-                    string.IsNullOrEmpty(parcel.Section) ? "-" : parcel.Section);
-            }
+            // Positionner devant la camera
+            PositionInFrontOfCamera();
 
-            if (_numeroText != null)
-            {
-                _numeroText.text = string.Format("Numéro: {0}",
-                    string.IsNullOrEmpty(parcel.Numero) ? "-" : parcel.Numero);
-            }
+            // Afficher
+            _panelContainer.SetActive(true);
 
-            if (_surfaceText != null)
-            {
-                _surfaceText.text = string.Format("Surface: {0}", parcel.GetFormattedSurface());
-            }
-
-            if (_codeInseeText != null)
-            {
-                _codeInseeText.text = string.Format("Code INSEE: {0}",
-                    string.IsNullOrEmpty(parcel.CodeInsee) ? "-" : parcel.CodeInsee);
-            }
-
-            // Afficher le panel
-            gameObject.SetActive(true);
-
-            Debug.Log(string.Format("[ParcelInfoPanel] Affichage parcelle: {0}", parcel));
+            Debug.Log(string.Format("[ParcelInfoPanel] Affichage parcelle: {0}", parcel.GetFormattedId()));
         }
 
         /// <summary>
@@ -245,65 +91,203 @@ namespace GeoscaleCadastre.UI
         /// </summary>
         public void Hide()
         {
-            gameObject.SetActive(false);
+            if (_panelContainer != null)
+            {
+                _panelContainer.SetActive(false);
+            }
             _currentParcel = null;
 
             if (OnPanelClosed != null)
                 OnPanelClosed();
         }
 
-        /// <summary>
-        /// Copie l'IDU de la parcelle dans le presse-papiers
-        /// </summary>
-        public void CopyIdu()
+        private void PositionInFrontOfCamera()
         {
-            if (_currentParcel != null && !string.IsNullOrEmpty(_currentParcel.Idu))
-            {
-                GUIUtility.systemCopyBuffer = _currentParcel.Idu;
+            Camera cam = Camera.main;
+            if (cam == null) return;
 
-                if (OnIduCopied != null)
-                    OnIduCopied(_currentParcel.Idu);
+            Vector3 forward = cam.transform.forward;
+            Vector3 position = cam.transform.position
+                + forward * _distanceFromCamera
+                + Vector3.up * _verticalOffset;
 
-                Debug.Log(string.Format("[ParcelInfoPanel] IDU copié: {0}", _currentParcel.Idu));
-            }
-            else
-            {
-                Debug.LogWarning("[ParcelInfoPanel] Aucun IDU à copier");
-            }
+            transform.position = position;
+            // Face a la camera
+            transform.rotation = Quaternion.LookRotation(transform.position - cam.transform.position);
         }
 
-        private void OnParcelSelected(ParcelModel parcel)
+        #region UI Construction
+
+        private void BuildUI()
         {
-            if (_autoShowOnSelection)
-            {
-                DisplayParcelInfo(parcel);
-            }
+            if (_isBuilt) return;
+
+            // Canvas World Space
+            _canvas = gameObject.AddComponent<Canvas>();
+            _canvas.renderMode = RenderMode.WorldSpace;
+
+            var scaler = gameObject.AddComponent<CanvasScaler>();
+            scaler.dynamicPixelsPerUnit = 10f;
+
+            gameObject.AddComponent<GraphicRaycaster>();
+
+            RectTransform canvasRect = _canvas.GetComponent<RectTransform>();
+            canvasRect.sizeDelta = new Vector2(280, 240);
+            // 1 pixel = ~0.8mm -> panneau d'environ 22cm x 19cm
+            transform.localScale = Vector3.one * 0.0008f;
+
+            // Container (pour show/hide sans desactiver le canvas)
+            _panelContainer = new GameObject("PanelContainer");
+            _panelContainer.transform.SetParent(canvasRect, false);
+            var containerRect = _panelContainer.AddComponent<RectTransform>();
+            containerRect.anchorMin = Vector2.zero;
+            containerRect.anchorMax = Vector2.one;
+            containerRect.offsetMin = Vector2.zero;
+            containerRect.offsetMax = Vector2.zero;
+
+            // Background
+            var bg = _panelContainer.AddComponent<Image>();
+            bg.color = BgColor;
+
+            // Layout vertical
+            var layout = _panelContainer.AddComponent<VerticalLayoutGroup>();
+            layout.padding = new RectOffset(16, 16, 12, 12);
+            layout.spacing = 4;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+
+            // === Header (titre + bouton fermer) ===
+            var header = CreateHorizontalGroup(containerRect, "Header", 32);
+
+            _titleText = CreateText(header.transform, "Title", "Parcelle", 18, AccentColor, FontStyles.Bold);
+            var titleLayout = _titleText.gameObject.AddComponent<LayoutElement>();
+            titleLayout.flexibleWidth = 1;
+
+            CreateCloseButton(header.transform);
+
+            // === Separateur ===
+            CreateSeparator(containerRect);
+
+            // === Lignes d'info ===
+            _communeText = CreateInfoRow(containerRect, "Commune", "-");
+            _sectionText = CreateInfoRow(containerRect, "Section", "-");
+            _numeroText = CreateInfoRow(containerRect, "Numero", "-");
+            _surfaceText = CreateInfoRow(containerRect, "Surface", "-");
+            _codeInseeText = CreateInfoRow(containerRect, "Code INSEE", "-");
+
+            _isBuilt = true;
+            Debug.Log("[ParcelInfoPanel] UI construite");
         }
 
-        private void OnSelectionCleared()
+        private GameObject CreateHorizontalGroup(Transform parent, string name, float height)
         {
-            if (_hideOnClear)
-            {
-                Hide();
-            }
+            var go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+
+            var rect = go.AddComponent<RectTransform>();
+            var layoutElem = go.AddComponent<LayoutElement>();
+            layoutElem.preferredHeight = height;
+
+            var hLayout = go.AddComponent<HorizontalLayoutGroup>();
+            hLayout.spacing = 8;
+            hLayout.childForceExpandWidth = false;
+            hLayout.childForceExpandHeight = true;
+            hLayout.childControlWidth = true;
+            hLayout.childControlHeight = true;
+            hLayout.childAlignment = TextAnchor.MiddleLeft;
+
+            return go;
         }
 
-        #region MRTK Events (public for manual/Interactable calls)
+        private TMP_Text CreateText(Transform parent, string name, string text,
+            float fontSize, Color color, FontStyles style = FontStyles.Normal)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(parent, false);
 
-        /// <summary>
-        /// Appelé par MRTK Interactable pour fermer le panel
-        /// </summary>
+            var rect = go.AddComponent<RectTransform>();
+
+            var tmp = go.AddComponent<TextMeshProUGUI>();
+            tmp.text = text;
+            tmp.fontSize = fontSize;
+            tmp.color = color;
+            tmp.fontStyle = style;
+            tmp.enableAutoSizing = false;
+            tmp.overflowMode = TextOverflowModes.Ellipsis;
+            tmp.alignment = TextAlignmentOptions.MidlineLeft;
+
+            return tmp;
+        }
+
+        private void CreateCloseButton(Transform parent)
+        {
+            var go = new GameObject("CloseButton");
+            go.transform.SetParent(parent, false);
+
+            var layoutElem = go.AddComponent<LayoutElement>();
+            layoutElem.preferredWidth = 28;
+            layoutElem.preferredHeight = 28;
+
+            var image = go.AddComponent<Image>();
+            image.color = new Color(0.2f, 0.2f, 0.2f, 0.8f);
+
+            var btn = go.AddComponent<Button>();
+            btn.targetGraphic = image;
+            btn.onClick.AddListener(Hide);
+
+            var colors = btn.colors;
+            colors.highlightedColor = new Color(0.8f, 0.2f, 0.2f, 0.8f);
+            colors.pressedColor = new Color(0.6f, 0.1f, 0.1f, 0.8f);
+            btn.colors = colors;
+
+            // Texte "X"
+            var xText = CreateText(go.transform, "X", "X", 16, TextColor, FontStyles.Bold);
+            xText.alignment = TextAlignmentOptions.Center;
+            var xRect = xText.GetComponent<RectTransform>();
+            xRect.anchorMin = Vector2.zero;
+            xRect.anchorMax = Vector2.one;
+            xRect.offsetMin = Vector2.zero;
+            xRect.offsetMax = Vector2.zero;
+        }
+
+        private void CreateSeparator(Transform parent)
+        {
+            var go = new GameObject("Separator");
+            go.transform.SetParent(parent, false);
+
+            var layoutElem = go.AddComponent<LayoutElement>();
+            layoutElem.preferredHeight = 1;
+
+            var image = go.AddComponent<Image>();
+            image.color = SeparatorColor;
+        }
+
+        private TMP_Text CreateInfoRow(Transform parent, string label, string value)
+        {
+            var row = CreateHorizontalGroup(parent, "Row_" + label, 22);
+
+            // Label
+            var labelText = CreateText(row.transform, "Label", label, 13, LabelColor);
+            var labelLayout = labelText.gameObject.AddComponent<LayoutElement>();
+            labelLayout.preferredWidth = 100;
+
+            // Value
+            var valueText = CreateText(row.transform, "Value", value, 14, TextColor, FontStyles.Bold);
+            var valueLayout = valueText.gameObject.AddComponent<LayoutElement>();
+            valueLayout.flexibleWidth = 1;
+
+            return valueText;
+        }
+
+        #endregion
+
+        #region MRTK Callbacks
+
         public void OnMRTKClose()
         {
             Hide();
-        }
-
-        /// <summary>
-        /// Appelé par MRTK Interactable pour copier l'IDU
-        /// </summary>
-        public void OnMRTKCopyIdu()
-        {
-            CopyIdu();
         }
 
         #endregion
