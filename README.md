@@ -157,7 +157,3 @@ Les tests MRTK sont disponibles via le Unity Test Runner (Window > General > Tes
 
 - `Microsoft.MixedReality.Toolkit.Tests.EditModeTests`
 - `Microsoft.MixedReality.Toolkit.Tests.PlayModeTests`
-
-## Licence
-
-Usage interne -- adapte de Geoscale.
